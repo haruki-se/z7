@@ -63,7 +63,13 @@ class BridgeTests(unittest.TestCase):
         self.send_for(token, .25)
         self.assertEqual(self.receiver.speed, .2)
         self.assertEqual(self.bridge.status()['receiver_mode'], 'SIM')
-        time.sleep(.45)
+        # Bridge invalidation and delivery of the UDP stop occur on separate
+        # threads; await both observations, allowing bounded scheduler jitter.
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            if not self.bridge.status()['active'] and self.receiver.speed == 0:
+                break
+            time.sleep(.01)
         self.assertFalse(self.bridge.status()['active'])
         self.assertEqual(self.receiver.speed, 0)
         with self.assertRaises(ValueError):
@@ -92,7 +98,7 @@ class BridgeTests(unittest.TestCase):
             request = urllib.request.Request(root + path, json.dumps(data).encode(), {'Content-Type': 'application/json', 'Origin': root})
             with urllib.request.urlopen(request) as response: return json.load(response)
         try:
-            for asset in ('/', '/app.js', '/analysis.js', '/feature-worklet.js', '/style.css'):
+            for asset in ('/', '/app.js', '/analysis.js', '/feature-worklet.js', '/style.css', '/comparison.js', '/comparison-ui.js', '/comparison-worker.js'):
                 with urllib.request.urlopen(root + asset) as r: self.assertEqual(r.status, 200)
             armed = post('/api/arm', {'source': 'demo'})
             self.assertTrue(post('/api/command', {'token': armed['token'], 'seq': 1, 'speed': .1, 'turn': 0})['active'])
@@ -111,6 +117,7 @@ class BridgeTests(unittest.TestCase):
         self.bridge.loopback = False
         try:
             with self.assertRaises(ValueError): self.bridge.arm('demo')
+            with self.assertRaises(ValueError): self.bridge.arm('file')
         finally: self.bridge.loopback = original
 
 

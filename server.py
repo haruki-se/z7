@@ -14,6 +14,7 @@ from protocol import WATCHDOG_SECONDS
 
 ROOT = Path(__file__).resolve().parent
 ASSETS = {"/": ("index.html", "text/html; charset=utf-8"), "/index.html": ("index.html", "text/html; charset=utf-8"), "/style.css": ("style.css", "text/css"), "/app.js": ("app.js", "text/javascript"), "/analysis.js": ("analysis.js", "text/javascript"), "/feature-worklet.js": ("feature-worklet.js", "text/javascript")}
+ASSETS.update({f"/{name}": (name, "text/javascript") for name in ("comparison.js", "comparison-ui.js", "comparison-worker.js")})
 
 
 class Bridge:
@@ -47,8 +48,8 @@ class Bridge:
         with self.lock:
             if not self.target:
                 raise ValueError("UDP通信先が未設定です。--robot-host を指定してください。")
-            if source not in ("live", "demo") or source == "demo" and not self.loopback:
-                raise ValueError("デモ演奏はPC内の受信テストにのみ送信できます。")
+            if source not in ("live", "demo", "file") or source != "live" and not self.loopback:
+                raise ValueError("デモ・ファイル再生はPC内の受信テストにのみ送信できます。")
             self._stop("新しい送信セッション")
             self.token, self.session = secrets.token_hex(16), secrets.token_hex(4)
             self.active = True

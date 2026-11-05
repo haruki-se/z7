@@ -1,8 +1,10 @@
+import {initComparison} from './comparison-ui.js';
 import {DEFAULT_CONFIG, MotionMapper, clamp, makeDemo, validateConfig} from './analysis.js';
 const $ = id => document.getElementById(id);
 let config = {...DEFAULT_CONFIG}, session = null, feature = null, receivedAt = 0;
 let monitoring = false, paused = false, calibration = null, configValid = true;
-let recorder = null, recordingTimer, recordingUrl, recordingPending = false;
+let recorder = null, recordingTimer, recordingUrl, recordingBlob, recordingPending = false;
+let comparisonUi;
 let log = null, logging = false, logStarted = 0;
 let bridge = null, armed = null, sending = false, arming = false, armGeneration = 0, txStatus = null;
 const mapper = new MotionMapper();
@@ -65,9 +67,10 @@ function stopAudio(reason = '入力は停止中です。') {
   if (old) {
     old.input?.getTracks().forEach(track => track.stop());
     old.recordStream?.getTracks().forEach(track => track.stop());
-    if (old.mode === 'demo') { try { old.source?.stop(); } catch {} }
+    if (old.mode !== 'live') { try { old.source?.stop(); } catch {} }
     old.worklet?.disconnect(); old.context.close().catch(() => {});
   }
+  comparisonUi?.setPlayback(false);
   feature = null; calibration = null; mapper.reset(); command = zero();
   stopLog('入力停止に合わせて実験記録を終了しました。');
   $('start').disabled = !secureAudio; $('demo').disabled = !window.AudioWorkletNode;
@@ -77,12 +80,13 @@ function stopAudio(reason = '入力は停止中です。') {
   message('detail', '入力デバイスは接続していません。'); message('status', reason);
   renderFeatures();
 }
-async function startAudio(mode) {
+async function startAudio(mode, selection = null) {
   stopAudio(); paused = false; $('resumeMotion').hidden = true;
-  const s = {mode, context: new AudioContext({latencyHint: 'interactive'}), ready: false};
+  const s = {mode, context: new AudioContext({latencyHint: 'interactive', ...(mode === 'file' ? {sampleRate: selection.buffer.sampleRate} : {})}), ready: false};
+  if (mode === 'file') comparisonUi?.setPlayback(true);
   session = s;
   $('start').disabled = $('demo').disabled = $('device').disabled = true; $('stop').disabled = false;
-  message('status', mode === 'live' ? '入力の許可・接続を待っています…' : 'デモ音源を準備しています…');
+  message('status', mode === 'live' ? '入力の許可・接続を待っています…' : mode === 'file' ? 'ファイル再生を準備しています…' : 'デモ音源を準備しています…');
   try {
     await s.context.resume();
     if (mode === 'live') {
@@ -94,6 +98,10 @@ async function startAudio(mode) {
       track.onended = () => { if (session === s) stopAudio('入力が切断されました。動作と送信を停止しました。'); };
       await devices().catch(() => {});
       if (track.getSettings().deviceId) $('device').value = track.getSettings().deviceId;
+    } else if (mode === 'file') {
+      s.source = s.context.createBufferSource(); s.source.buffer = selection.buffer;
+      s.device = selection.name; s.fileSource = {kind: selection.kind, name: selection.name, encodedSha256: selection.encodedSha256 ?? null};
+      s.source.onended = () => { if (session === s) stopAudio('ファイルの再生が終了しました。動作・送信を停止しました。'); };
     } else {
       const buffer = s.context.createBuffer(1, s.context.sampleRate * 8, s.context.sampleRate);
       buffer.copyToChannel(makeDemo(s.context.sampleRate), 0);
@@ -115,7 +123,7 @@ async function startAudio(mode) {
     s.source.connect(s.gain); s.gain.connect(s.context.destination);
     const destination = s.context.createMediaStreamDestination();
     s.source.connect(destination); s.recordStream = destination.stream;
-    if (mode === 'demo') s.source.start();
+    if (mode !== 'live') s.source.start();
     s.context.onstatechange = () => {
       if (session === s && s.ready && s.context.state !== 'running') halt('音声処理が一時停止したため、動作を停止しました。');
     };
@@ -123,7 +131,7 @@ async function startAudio(mode) {
     $('monitor').disabled = false; $('calibrate').disabled = mode !== 'live';
     $('record').disabled = !window.MediaRecorder || recordingPending;
     $('logStart').disabled = false;
-    $('connection').textContent = mode === 'live' ? 'LIVE INPUT' : 'DEMO / 120 BPM';
+    $('connection').textContent = mode === 'live' ? 'LIVE INPUT' : mode === 'file' ? 'AUDIO FILE' : 'DEMO / 120 BPM';
     $('connection').classList.add('active');
     message('detail', `${s.device} · ${s.context.sampleRate} Hz · 解析：${$('channel').selectedOptions[0].textContent}`);
     if (!window.MediaRecorder) message('recordStatus', 'このブラウザは録音に対応していません。');
@@ -142,7 +150,7 @@ function halt(reason = '全停止しました。再開には「動作を再開�
   paused = true; command = zero(); mapper.reset(); monitoring = false; updateMonitor();
   disarm(reason); $('resumeMotion').hidden = false; event('halt', {reason}); message('motionStatus', reason);
 }
-$('emergency').onclick = () => { halt(); finishRecording(); $('playback').pause(); };
+$('emergency').onclick = () => { comparisonUi?.cancel(false); halt(); finishRecording(); $('playback').pause(); };
 window.addEventListener('keydown', e => { if (e.key === 'Escape') $('emergency').click(); });
 $('resumeMotion').onclick = async () => {
   if (!configValid) { message('motionStatus', '無効な設定を修正してから再開してください。'); return; }
@@ -158,7 +166,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) halt(
 window.addEventListener('pagehide', () => { stopAudio(); });
 $('channel').onchange = () => {
   disarm('解析チャンネル変更'); mapper.reset(); feature = null; updateSettings();
-  event('channel_change', {channel: $('channel').value});
+  event('channel_change', {channel: $('channel').value}); comparisonUi?.markSettingsChanged();
   if (session) message('detail', `${session.device} · ${session.context.sampleRate} Hz · 解析：${$('channel').selectedOptions[0].textContent}`);
 };
 function readConfig() {
@@ -168,8 +176,8 @@ function readConfig() {
   const valid = validateConfig(next) && inputs.every(id => $(id).value !== '' && $(id).checkValidity());
   configValid = valid;
   inputs.forEach(id => $(id).setAttribute('aria-invalid', String(!valid)));
-  if (!valid) { halt('設定が無効です。値を修正して動作を再開してください。'); message('configStatus', '強く弾いた音は無音判定より6 dB以上高く設定してください。各項目の範囲も確認してください。'); return; }
-  config = next; mapper.reset(); updateSettings();
+  if (!valid) { comparisonUi?.markSettingsChanged(); halt('設定が無効です。値を修正して動作を再開してください。'); message('configStatus', '強く弾いた音は無音判定より6 dB以上高く設定してください。各項目の範囲も確認してください。'); return; }
+  config = next; mapper.reset(); updateSettings(); comparisonUi?.markSettingsChanged();
   $('maxSpeedValue').value = `${$('maxSpeed').value}%`; $('maxTurnValue').value = `${$('maxTurn').value}%`;
   message('ruleHelp', config.profile === 'volume' ? '音が大きいほど速く前進。無音では停止します。' : '強弱で速度、アタックごとに左右交互の旋回。安定した発音間隔で速度を補正します。');
   message('configStatus', '設定を反映しました。UDP送信は停止状態です。'); event('config_change', {config: {...config}});
@@ -232,7 +240,7 @@ $('record').onclick = () => {
       recordingPending = false;
       clearTimeout(recordingTimer);
       if (recordingUrl) URL.revokeObjectURL(recordingUrl);
-      const blob = new Blob(chunks, {type: active.mimeType}); recordingUrl = URL.createObjectURL(blob);
+      const blob = new Blob(chunks, {type: active.mimeType}); recordingBlob = blob; $('useRecording').disabled = !blob.size; recordingUrl = URL.createObjectURL(blob);
       $('playback').src = recordingUrl; $('playback').hidden = false; $('download').href = recordingUrl;
       $('download').download = `guitar-${Date.now()}.${blob.type.includes('mp4') ? 'mp4' : blob.type.includes('ogg') ? 'ogg' : 'webm'}`;
       $('download').hidden = !blob.size; $('record').disabled = !session?.ready; $('recordStop').disabled = true;
@@ -243,12 +251,15 @@ $('record').onclick = () => {
   } catch (e) { message('recordStatus', `録音できませんでした：${e.message}`); }
 };
 $('recordStop').onclick = finishRecording;
+$('useRecording').onclick = () => {
+  if (recordingBlob?.size) { comparisonUi.loadBlob(recordingBlob, {name: 'アプリで録音した演奏', kind: 'recording'}); $('comparisonTitle').scrollIntoView({behavior: 'smooth'}); }
+};
 
 $('logStart').onclick = () => {
   if (!session?.ready) return;
   if (log?.rows.length && !log.saved && !window.confirm('未保存の実験記録があります。新しい記録に置き換えますか？')) return;
   logStarted = performance.now(); logging = true;
-  log = {version: 1, appVersion: '0.2.0', startedAt: new Date().toISOString(), source: session.mode, device: session.device, sampleRate: session.context.sampleRate, frameSize: 2048, hopSize: 1024, browser: navigator.userAgent, note: $('experimentNote').value, initialConfig: {...config}, channel: $('channel').value, units: {db: 'dBFS RMS', centroid: 'Hz, spectral centroid', speed: 'normalized command, not measured speed', turn: 'normalized command', time: 'milliseconds since log start'}, rows: [], events: []};
+  log = {version: 1, appVersion: '0.3.0', startedAt: new Date().toISOString(), source: session.mode, fileSource: session.fileSource ?? null, device: session.device, sampleRate: session.context.sampleRate, frameSize: 2048, hopSize: 1024, browser: navigator.userAgent, note: $('experimentNote').value, initialConfig: {...config}, channel: $('channel').value, units: {db: 'dBFS RMS', centroid: 'Hz, spectral centroid', speed: 'normalized command, not measured speed', turn: 'normalized command', time: 'milliseconds since log start'}, rows: [], events: []};
   $('logStart').disabled = true; $('logStop').disabled = false; $('experimentNote').disabled = true;
   $('exportCsv').disabled = $('exportJson').disabled = true; message('logStatus', '実験記録中…'); event('log_start');
 };
@@ -290,7 +301,7 @@ function disarm(reason = '送信停止') {
   $('disarm').disabled = true; message('transportStatus', `送信オフ · ${reason}`);
 }
 $('arm').onclick = async () => {
-  if (!isFresh() || paused || !configValid || !bridge?.target || session.mode === 'demo' && !bridge.loopback) return;
+  if (!isFresh() || paused || !configValid || !bridge?.target || session.mode !== 'live' && !bridge.loopback) return;
   const generation = ++armGeneration; arming = true;
   try {
     const result = await api('arm', {source: session.mode});
@@ -321,8 +332,15 @@ setInterval(() => {
   command = mapper.step(feature, config, now / 1000, fresh && !paused && configValid);
   if (calibration && now - calibration.start >= 2000) finishCalibration();
   renderFeatures(); renderMotion(dt); appendLog(now, fresh);
-  $('arm').disabled = !!armed || arming || !fresh || paused || !configValid || !bridge?.target || session?.mode === 'demo' && !bridge.loopback;
+  $('arm').disabled = !!armed || arming || !fresh || paused || !configValid || !bridge?.target || session?.mode !== 'live' && !bridge.loopback;
   if (armed) transmit();
 }, 50);
 if (navigator.mediaDevices) navigator.mediaDevices.addEventListener('devicechange', () => devices().catch(() => {}));
 checkBridge();
+
+comparisonUi = initComparison({
+  getConfig: () => configValid ? {...config} : null,
+  getChannel: () => $('channel').value,
+  onPrepare: () => { stopAudio('ファイル読み込み・比較のため入力と送信を停止しました。'); $('playback').pause(); },
+  onPlay: selection => { startAudio('file', selection); $('connection').scrollIntoView({behavior: 'smooth'}); }
+});
