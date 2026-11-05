@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>G3 INPUT CHECK</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#101713;color:#edf6ef}body{max-width:850px;margin:60px auto;padding:0 24px}header{display:flex;align-items:center;gap:16px}header span{color:#91efaf;font-size:12px;letter-spacing:3px}h1{font-size:clamp(28px,5vw,44px);margin:10px 0}p{color:#acbfb1;line-height:1.8}.panel{background:#1b2720;border:1px solid #34483a;border-radius:18px;padding:24px;margin:20px 0}label{display:block;margin-bottom:10px}select,button{font:inherit;border:1px solid #486250;border-radius:8px;padding:12px;background:#233329;color:inherit}select{width:100%;margin-bottom:16px}button{cursor:pointer;margin:4px 6px 4px 0}button.primary{background:#a4f2b8;color:#14271a}button:disabled{opacity:.4;cursor:default}.reading{font-size:38px;font-variant-numeric:tabular-nums;margin:12px 0}.meter{height:20px;background:#0c120e;border-radius:6px;overflow:hidden}.meter div{height:100%;width:0;background:#95efab;transition:width .06s}canvas{width:100%;height:160px;background:#101a14;border-radius:8px;margin-top:20px}#status{min-height:28px;color:#baf6cc}audio{width:100%;margin-top:16px}.small{font-size:13px}a{color:#baf6cc}
+</style>
+<header><span>ZOOM G3 / USB AUDIO</span></header><h1>入力の音を、確かめる。</h1>
+<p>G3をUSBで接続し、ギターを弾いてください。選択した入力のレベルと波形を表示します。スピーカーへの直接出力は行いません。</p>
+<section class="panel"><label for="device">音声入力デバイス</label><select id="device"><option value="">既定の入力（許可後に一覧を取得）</option></select><button id="start" class="primary">入力を開始</button><button id="stop" disabled>停止</button><p id="status" role="status" aria-live="polite">入力は停止中です。</p><div class="reading"><span id="level">−∞</span> <small>dBFS</small></div><div class="meter" role="meter" aria-label="入力レベル" aria-valuemin="-60" aria-valuemax="0" aria-valuenow="-60"><div id="bar"></div></div><p id="detail" class="small">入力デバイスはまだ接続していません。</p><canvas id="wave" aria-label="入力音声の波形"></canvas></section>
+<section class="panel"><h2>録って聴く</h2><p class="small">最大10秒録音します。録音はブラウザ内で処理され、サーバーへ送信されません。再生時はヘッドホンをおすすめします。</p><button id="record" disabled>10秒録音</button><button id="recordStop" disabled>録音を終了</button><audio id="playback" controls hidden></audio><a id="download" hidden>録音を保存</a></section>
+<p class="small">G3が一覧に出ない場合は、USB接続とOSの音声入力設定・必要なドライバーを確認してください。信号が出ない場合はG3の出力設定も確認してください。マイクの利用には localhost または HTTPS とブラウザの許可が必要です。</p>
+<script src="app.js"></script>
+</html>
