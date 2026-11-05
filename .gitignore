@@ -1,0 +1,5 @@
+__pycache__/
+.venv/
+node_modules/
+firmware/g3_receiver/config.h
+experiments/
